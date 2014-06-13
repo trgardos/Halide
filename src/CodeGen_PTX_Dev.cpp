@@ -27,17 +27,81 @@ CodeGen_PTX_Dev::CodeGen_PTX_Dev(Target host) : CodeGen(host) {
     user_assert(llvm_NVPTX_enabled) << "llvm build not configured with nvptx target enabled\n.";
 }
 
+namespace {
+struct BufferSize {
+    string name;
+    size_t size;
+
+    BufferSize() : size(0) {}
+    BufferSize(string name, size_t size) : name(name), size(size) {}
+
+    bool operator < (const BufferSize &r) const {
+        return size < r.size;
+    }
+};
+}
+
 void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
                                  std::string name,
                                  const std::vector<GPU_Argument> &args) {
 
     debug(2) << "In CodeGen_PTX_Dev::add_kernel\n";
+    // Figure out which arguments should be passed in __constant.
+    // Such arguments should be:
+    // - not written to,
+    // - loads are block-uniform,
+    // - constant size,
+    // - and all allocations together should be less than the max constant
+    //   buffer size given by CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE.
+    // The last condition is handled via the preprocessor in the kernel
+    // declaration.
+    vector<BufferSize> constants;
+    for (size_t i = 0; i < args.size(); i++) {
+        if (args[i].is_buffer &&
+            CodeGen_GPU_Dev::is_buffer_constant(stmt, args[i].name) &&
+            args[i].size > 0) {
+            constants.push_back(BufferSize(args[i].name, args[i].size));
+        }
+    }
+
+    // Sort the constant candidates from smallest to largest. This will put
+    // as many of the constant allocations in __constant as possible.
+    // Ideally, we would prioritize constant buffers by how frequently they
+    // are accessed.
+    sort(constants.begin(), constants.end());
+
+    // Currently, all compute capability versions have 64KB of constant
+    // memory.
+    // Allow the compiler to use 1024 bytes of constants for kernel args,
+    // immediate constants, ... there might be a better way to do this...
+    size_t max_constant_size = 65535 - 1024;
+    // Compute the cumulative sum of the constants, truncate the constants
+    // that won't fit.
+    size_t constant_size = 0;
+    for (size_t i = 0; i < constants.size(); i++) {
+        constant_size += constants[i].size;
+        if (constant_size > max_constant_size) {
+            constants.resize(i);
+            break;
+        }
+    }
 
     // Now deduce the types of the arguments to our function
     vector<llvm::Type *> arg_types(args.size());
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i].is_buffer) {
-            arg_types[i] = llvm_type_of(UInt(8))->getPointerTo();
+            vector<BufferSize>::iterator constant = constants.begin();
+            while (constant != constants.end() &&
+                   constant->name != args[i].name) {
+                constant++;
+            }
+
+            int addr_space = 0;
+            if (constant != constants.end()) {
+                addr_space = 4;
+            }
+
+            arg_types[i] = llvm_type_of(UInt(8))->getPointerTo(addr_space);
         } else {
             arg_types[i] = llvm_type_of(args[i].type);
         }

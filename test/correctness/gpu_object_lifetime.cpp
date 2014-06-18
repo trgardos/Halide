@@ -21,15 +21,21 @@ int main(int argc, char *argv[]) {
     target.features |= Target::GPUDebug;
 
     for (int i = 0; i < 2; i++) {
+        Image<int32_t> input(256);
+        for (int i = 0; i < input.width(); ++i) {
+            input(i) = i;
+        }
+        input.set_host_dirty();
+
         Var x;
         Func f;
-        f(x) = x;
+        f(x) = x; //input(x);
 
         f.gpu_tile(x, 32);
         f.set_custom_print(halide_print);
 
-        Image<int32_t> result = f.realize(256, target);
-        for (int i = 0; i < 256; i++) {
+        Image<int32_t> result = f.realize(input.width(), target);
+        for (int i = 0; i < input.width(); i++) {
             if (result(i) != i) {
                 std::cout << "Error! " << result(i) << " != " << i << std::endl;
                 return -1;

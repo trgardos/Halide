@@ -24,8 +24,8 @@ int main(int argc, char **argv) {
         output.dev_free();
 
         for (int x = 0; x < output.width(); x++) {
-            if (output(x) != x) {
-                printf("Error! %d != %d\n", output(x), x);
+            if (output(x) != x % 16) {
+                printf("Error! %d != %d\n", output(x), x % 16);
                 return -1;
             }
         }

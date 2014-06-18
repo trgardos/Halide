@@ -9,8 +9,14 @@ int main(int argc, char **argv) {
 
     Var x;
 
+    Image<int32_t> input(16);
+    for (int i = 0; i < input.width(); ++i) {
+        input(i) = i;
+    }
+    input.set_host_dirty();
+
     Func f;
-    f(x) = x;
+    f(x) = x % 16; //input(x % 16);
 
     Target target = get_target_from_environment();
     if (target.has_gpu_feature()) {

@@ -24,18 +24,17 @@ int main(int argc, char **argv) {
 
     // Sum-scan within each block of size B.
     RDom r1(0, B);
-    f(r1, y) = im(y*B + r1) + f(r1-1, y);
-    f.update(0).gpu_blocks(y);
+    auto scan_block(f(r1, y) = im(y*B + r1) + f(r1-1, y));
+    scan_block.gpu_blocks(y);
 
     // Sum-scan along the last element of each block into a scratch space just before the start of each block.
     RDom r2(1, blocks-1);
-    f(-1, r2) = f(B-1, r2-1) + f(-1, r2-1);
-    f.update(1).gpu_single_thread();
+    ScheduleHandle scan_last = { f(-1, r2) = f(B-1, r2-1) + f(-1, r2-1) };
+    scan_last.gpu_single_thread();
 
     // Add the last element of the previous block to everything in each row
     RDom r3(0, B);
-    f(r3, y) += f(-1, y);
-    f.update(2).gpu_blocks(y).gpu_threads(r3);
+    (f(r3, y) += f(-1, y)).gpu_blocks(y).gpu_threads(r3);
 
     // Read out the output
     Func out;

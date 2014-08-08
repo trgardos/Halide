@@ -2,6 +2,7 @@
 #define HALIDE_BOUNDS_H
 
 #include "IR.h"
+#include "IROperator.h"
 #include "Scope.h"
 #include <vector>
 
@@ -52,10 +53,13 @@ struct Box {
     const Interval &operator[](int i) const {return bounds[i];}
     void resize(size_t sz) {bounds.resize(sz);}
     void push_back(const Interval &i) {bounds.push_back(i);}
+    bool used_defined() const {return used.defined() && !is_one(used);}
 };
 
 // Expand box a to encompass box b
 void merge_boxes(Box &a, const Box &b);
+// Test if box a could possibly overlap box b.
+bool boxes_overlap(const Box &a, const Box &b);
 
 /** Compute rectangular domains large enough to cover all the 'Call's
  * to each function that occurs within a given statement or

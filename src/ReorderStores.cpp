@@ -6,6 +6,7 @@
 #include "IREquality.h"
 #include "Substitute.h"
 #include "ExprUsesVar.h"
+#include "RemoveUndef.h"
 
 #include <list>
 
@@ -19,8 +20,6 @@ public:
     Stmt stmt;
     std::vector<const Load *> loads;
     std::vector<const Store *> stores;
-    // Lets that only load a value.
-    std::map<std::string, const Load *> trivial_lets;
     std::vector<const Free *> frees;
 
     StmtInfo(Stmt stmt) : stmt(stmt) {
@@ -42,13 +41,6 @@ private:
 
     void visit(const Free *op) {
         frees.push_back(op);
-        IRVisitor::visit(op);
-    }
-
-    void visit(const LetStmt *op) {
-        if (const Load *value = op->value.as<Load>()) {
-            trivial_lets[op->name] = value;
-        }
         IRVisitor::visit(op);
     }
 };
@@ -100,22 +92,16 @@ Stmt substitute_trivial_stores(const StmtInfo &to, const StmtInfo &from) {
     Stmt result = to.stmt;
     for (size_t i = 0; i < to.stores.size(); i++) {
         const Store *store = to.stores[i];
-        // If the store is a variable, check if it is from a load let.
-        if (const Variable *store_value = store->value.as<Variable>()) {
-            std::map<string, const Load *>::const_iterator trivial_let = to.trivial_lets.find(store_value->name);
-            if (trivial_let != to.trivial_lets.end()) {
-                const Load *load = trivial_let->second;
 
-                // Now, find out if this load is from a store in
-                // from. If so, we can replace the load with the value
-                // of the store.
-                for (size_t j = 0; j < from.stores.size(); j++) {
-                    const Store *from_store = from.stores[j];
-                    if (load->name == from_store->name && equal(load->index, from_store->index)) {
-//                        result = substitute(load, result);
-//                        debug(0) << Expr(load) << " " << Expr(from_store->value) << "\n";
-                        break;
-                    }
+        // If the store is storing a load, try to just store the value
+        if (const Load *store_value = store->value.as<Load>()) {
+            for (size_t j = 0; j < from.stores.size(); j++) {
+                const Store *from_store = from.stores[j];
+
+                // If the store in the to stmt is storing a load from a store in the from stmt, just store the value in the from stmt.
+                if (from_store->name == store_value->name && equal(from_store->index, store_value->index)) {
+                    result = substitute(store_value, from_store->value, result);
+                    break;
                 }
             }
         }

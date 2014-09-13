@@ -147,7 +147,7 @@ foreach (i ${RUNTIME_CPP} )
     set(INITMOD "${INITMOD_PREFIX}${i}_${j}.cpp")
     add_custom_command(OUTPUT "${LL}"
                        DEPENDS "${SOURCE}"
-                       COMMAND ${CLANG} -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -m${j} "-I${NATIVE_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL}"
+                       COMMAND ${CLANG} -g -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -m${j} "-I${NATIVE_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL}"
                        COMMENT "${SOURCE} -> ${LL}")
     add_custom_command(OUTPUT "${BC}"
                        DEPENDS "${LL}"
@@ -250,6 +250,7 @@ set(HEADER_FILES
   Tracing.h
   UnrollLoops.h
   Var.h
+  VaryingAttributes.h
   VectorizeLoops.h
   CodeGen_Posix.h
   CodeGen_ARM.h
@@ -355,6 +356,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   Inline.cpp
   Qualify.cpp
   UnifyDuplicateLets.cpp
+  VaryingAttributes.cpp
   ExprUsesVar.cpp
   Introspection.cpp
   Buffer.cpp

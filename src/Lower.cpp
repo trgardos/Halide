@@ -218,19 +218,20 @@ Stmt build_provide_loop_nest(Function f,
             if (split.exact) {
                 // The bounds of the old reduction variable need to be
                 // explicitly defined for the benefit of producers
-                // that feed into this stage. They are the base +
-                // inner for the inner loop iterations...
-                stmt = LetStmt::make(prefix + split.old_var + ".min",
-                                     base_var + inner, stmt);
-                stmt = LetStmt::make(prefix + split.old_var + ".max",
-                                     base_var + inner, stmt);
-
-                // ...and they run from base to base + split factor
-                // for the outer loop iterations.
+                // that feed into this stage. They run from base to
+                // base + split factor for the outer loop
+                // iterations...
                 stmt = LetStmt::make(prefix + split.old_var + ".min",
                                      base_var, stmt);
                 stmt = LetStmt::make(prefix + split.old_var + ".max",
                                      base_var + split.factor - 1, stmt);
+
+                // ...and they are the base + inner for the inner loop
+                // iterations.
+                stmt = LetStmt::make(prefix + split.old_var + ".min",
+                                     base_var + inner, stmt);
+                stmt = LetStmt::make(prefix + split.old_var + ".max",
+                                     base_var + inner, stmt);
 
                 // Note that this code is surprising because it
                 // defines the same variables with two different let

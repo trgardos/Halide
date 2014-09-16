@@ -19,12 +19,30 @@ class ExprUsesVars : public IRVisitor {
     using IRVisitor::visit;
 
     const Scope<T> &scope;
+    Scope<int> ignore;
 
     void visit(const Variable *v) {
-        if (scope.contains(v->name)) {
+        if (!ignore.contains(v->name) && scope.contains(v->name)) {
             result = true;
         }
     }
+
+    template <typename LetType>
+    void visit_let(const LetType *l) {
+        // We should ignore uses of lets if they define the var we're
+        // looking for.
+        ignore.push(l->name, 0);
+        l->value.accept(this);
+        ignore.pop(l->name);
+    }
+
+    void visit(const Let *l) {
+        visit_let(l);
+    }
+    void visit(const LetStmt *l) {
+        visit_let(l);
+    }
+
 public:
     ExprUsesVars(const Scope<T> &s) : scope(s), result(false) {}
     bool result;

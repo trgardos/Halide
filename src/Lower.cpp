@@ -135,10 +135,7 @@ Stmt build_provide_loop_nest(Function f,
                     // X -> f * Z + W
                     second.old_var = first.old_var;
                     // Drop first entirely
-                    for (size_t k = i; k < splits.size()-1; k++) {
-                        splits[k] = splits[k+1];
-                    }
-                    splits.pop_back();
+                    splits.erase(splits.begin() + i);
                     // Start processing this split from scratch,
                     // because we just clobbered it.
                     j = i+1;
@@ -221,19 +218,20 @@ Stmt build_provide_loop_nest(Function f,
             if (split.exact) {
                 // The bounds of the old reduction variable need to be
                 // explicitly defined for the benefit of producers
-                // that feed into this stage. They are the base +
-                // inner for the inner loop iterations...
-                stmt = LetStmt::make(prefix + split.old_var + ".min",
-                                     base_var + inner, stmt);
-                stmt = LetStmt::make(prefix + split.old_var + ".max",
-                                     base_var + inner, stmt);
-
-                // ...and they run from base to base + split factor
-                // for the outer loop iterations.
+                // that feed into this stage. They run from base to
+                // base + split factor for the outer loop
+                // iterations...
                 stmt = LetStmt::make(prefix + split.old_var + ".min",
                                      base_var, stmt);
                 stmt = LetStmt::make(prefix + split.old_var + ".max",
                                      base_var + split.factor - 1, stmt);
+
+                // ...and they are the base + inner for the inner loop
+                // iterations.
+                stmt = LetStmt::make(prefix + split.old_var + ".min",
+                                     base_var + inner, stmt);
+                stmt = LetStmt::make(prefix + split.old_var + ".max",
+                                     base_var + inner, stmt);
 
                 // Note that this code is surprising because it
                 // defines the same variables with two different let
@@ -259,9 +257,13 @@ Stmt build_provide_loop_nest(Function f,
             stmt = substitute(prefix + split.inner, inner, stmt);
             stmt = substitute(prefix + split.outer, outer, stmt);
 
-            if (split.exact) {
-                // If this is a fuse of RVars, we know the size.
-                known_size_dims[split.old_var] = known_size_dims[split.inner]*known_size_dims[split.outer];
+            // Maintain the known size of the fused dim if
+            // possible. This is important for possible later splits.
+            map<string, Expr>::iterator inner_dim = known_size_dims.find(split.inner);
+            map<string, Expr>::iterator outer_dim = known_size_dims.find(split.outer);
+            if (inner_dim != known_size_dims.end() &&
+                outer_dim != known_size_dims.end()) {
+                known_size_dims[split.old_var] = inner_dim->second*outer_dim->second;
             }
 
         } else {

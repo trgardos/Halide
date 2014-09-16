@@ -19,8 +19,9 @@ HalideExtern_1(int, call_counter, int);
 int main(int argc, char **argv) {
     Var x("x"), y("y");
 
-    Param<int> width("width");
+    Param<int> width("width"), height("height");
     width.set(16);
+    height.set(16);
 
     RDom range(0, width*2);
     RVar xi, xo;
@@ -46,7 +47,7 @@ int main(int argc, char **argv) {
             return -1;
         }
     }
-/*
+
     {
         // Test bounds inference of an RVar split + reorder.
         Func f("f"), g("g");
@@ -57,7 +58,7 @@ int main(int argc, char **argv) {
         f(range.x) = g(range.x);
 
         f.update(0).split(range.x, xo, xi, 2).reorder(xo, xi);
-        g.compute_at(f, xi);
+        g.compute_at(f, xo);
 
         f.compile_to_lowered_stmt("rvar_bounds_split_reorder.html", HTML);
 
@@ -68,7 +69,7 @@ int main(int argc, char **argv) {
             return -1;
         }
     }
-*/
+
     printf("Success!");
     return 0;
 }

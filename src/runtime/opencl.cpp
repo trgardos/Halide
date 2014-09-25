@@ -834,7 +834,12 @@ WEAK int halide_dev_run(void *user_context,
                         int threadsX, int threadsY, int threadsZ,
                         int shared_mem_bytes,
                         size_t arg_sizes[],
-                        void* args[]) {
+                        void* args[],
+                        char** attribute_names,
+                        int num_attributes,
+                        float** coords_per_dim,
+                        int num_coords_dim0,
+                        int num_coords_dim1) {
     DEBUG_PRINTF( user_context, "CL: halide_dev_run (user_context: %p, entry: %s, blocks: %dx%dx%d, threads: %dx%dx%d, shmem: %d)\n",
                   user_context, entry_name,
                   blocksX, blocksY, blocksZ,

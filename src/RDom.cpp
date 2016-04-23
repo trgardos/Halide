@@ -67,137 +67,74 @@ void RDom::init_vars(string name) {
 }
 
 RDom::RDom(ReductionDomain d) : dom(d) {
-    init_vars("");
+    if (d.defined()) {
+        init_vars("");
+    }
 }
 
-// We suffix all RVars with $r to prevent unintentional name matches with pure vars called x, y, z, w.
-RDom::RDom(Expr min, Expr extent, string name) {
-    if (name == "") {
+namespace {
+class CheckRDomBounds : public IRGraphVisitor {
+
+    using IRGraphVisitor::visit;
+
+    void visit(const Call *op) {
+        IRGraphVisitor::visit(op);
+        if (op->call_type == Call::Halide) {
+            offending_func = op->name;
+        }
+    }
+
+    void visit(const Variable *op) {
+        if (!op->param.defined() && !op->image.defined()) {
+            offending_free_var = op->name;
+        }
+    }
+public:
+    string offending_func;
+    string offending_free_var;
+};
+}
+
+void RDom::initialize_from_ranges(const std::vector<std::pair<Expr, Expr>> &ranges, string name) {
+    if (name.empty()) {
         name = make_entity_name(this, "Halide::RDom", 'r');
     }
 
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min), cast<int>(extent) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
+    std::vector<ReductionVariable> vars;
+    for (size_t i = 0; i < ranges.size(); i++) {
+        CheckRDomBounds checker;
+        ranges[i].first.accept(&checker);
+        ranges[i].second.accept(&checker);
+        user_assert(checker.offending_func.empty())
+            << "The bounds of the RDom " << name
+            << " in dimension " << i
+            << " are:\n"
+            << "  " << ranges[i].first << " ... " << ranges[i].second << "\n"
+            << "These depend on a call to the Func " << checker.offending_func << ".\n"
+            << "The bounds of an RDom may not depend on a call to a Func.\n";
+        user_assert(checker.offending_free_var.empty())
+            << "The bounds of the RDom " << name
+            << " in dimension " << i
+            << " are:\n"
+            << "  " << ranges[i].first << " ... " << ranges[i].second << "\n"
+            << "These depend on the variable " << checker.offending_free_var << ".\n"
+            << "The bounds of an RDom may not depend on a free variable.\n";
 
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
+        std::string rvar_uniquifier;
+        switch (i) {
+            case 0: rvar_uniquifier = "x"; break;
+            case 1: rvar_uniquifier = "y"; break;
+            case 2: rvar_uniquifier = "z"; break;
+            case 3: rvar_uniquifier = "w"; break;
+            default: rvar_uniquifier = std::to_string(i); break;
+        }
+        ReductionVariable rv;
+        rv.var = name + "." + rvar_uniquifier + "$r";
+        rv.min = cast<int32_t>(ranges[i].first);
+        rv.extent = cast<int32_t>(ranges[i].second);
+        vars.push_back(rv);
     }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
-
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, Expr min2, Expr extent2, string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
-    }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-        { name + ".z$r", cast<int>(min2), cast<int>(extent2) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
-
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, Expr min2, Expr extent2, Expr min3, Expr extent3,
-           string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
-    }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-        { name + ".z$r", cast<int>(min2), cast<int>(extent2) },
-        { name + ".w$r", cast<int>(min3), cast<int>(extent3) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
-
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, Expr min2, Expr extent2, Expr min3, Expr extent3,
-           Expr min4, Expr extent4, string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
-    }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-        { name + ".z$r", cast<int>(min2), cast<int>(extent2) },
-        { name + ".w$r", cast<int>(min3), cast<int>(extent3) },
-        { name + ".4$r", cast<int>(min4), cast<int>(extent4) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
-
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, Expr min2, Expr extent2, Expr min3, Expr extent3,
-           Expr min4, Expr extent4, Expr min5, Expr extent5, string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
-    }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-        { name + ".z$r", cast<int>(min2), cast<int>(extent2) },
-        { name + ".w$r", cast<int>(min3), cast<int>(extent3) },
-        { name + ".4$r", cast<int>(min4), cast<int>(extent4) },
-        { name + ".5$r", cast<int>(min5), cast<int>(extent5) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
-
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, Expr min2, Expr extent2, Expr min3, Expr extent3,
-           Expr min4, Expr extent4, Expr min5, Expr extent5, Expr min6, Expr extent6, string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
-    }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-        { name + ".z$r", cast<int>(min2), cast<int>(extent2) },
-        { name + ".w$r", cast<int>(min3), cast<int>(extent3) },
-        { name + ".4$r", cast<int>(min4), cast<int>(extent4) },
-        { name + ".5$r", cast<int>(min5), cast<int>(extent5) },
-        { name + ".6$r", cast<int>(min6), cast<int>(extent6) },
-    };
-    dom = build_domain(vars);
-    init_vars(name);
-}
-
-RDom::RDom(Expr min0, Expr extent0, Expr min1, Expr extent1, Expr min2, Expr extent2, Expr min3, Expr extent3,
-           Expr min4, Expr extent4, Expr min5, Expr extent5, Expr min6, Expr extent6, Expr min7, Expr extent7,
-           string name) {
-    if (name == "") {
-        name = make_entity_name(this, "Halide::RDom", 'r');
-    }
-
-    ReductionVariable vars[] = {
-        { name + ".x$r", cast<int>(min0), cast<int>(extent0) },
-        { name + ".y$r", cast<int>(min1), cast<int>(extent1) },
-        { name + ".z$r", cast<int>(min2), cast<int>(extent2) },
-        { name + ".w$r", cast<int>(min3), cast<int>(extent3) },
-        { name + ".4$r", cast<int>(min4), cast<int>(extent4) },
-        { name + ".5$r", cast<int>(min5), cast<int>(extent5) },
-        { name + ".6$r", cast<int>(min6), cast<int>(extent6) },
-        { name + ".7$r", cast<int>(min7), cast<int>(extent7) },
-    };
-    dom = build_domain(vars);
+    dom = ReductionDomain(vars);
     init_vars(name);
 }
 

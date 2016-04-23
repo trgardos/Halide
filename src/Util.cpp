@@ -4,6 +4,13 @@
 #include "Error.h"
 #include <sstream>
 #include <map>
+#include <atomic>
+#include <mutex>
+
+#ifdef __linux__
+#include <unistd.h>
+#include <linux/limits.h>
+#endif
 
 namespace Halide {
 namespace Internal {
@@ -13,9 +20,56 @@ using std::vector;
 using std::ostringstream;
 using std::map;
 
+std::string get_env_variable(char const *env_var_name, size_t &read) {
+    if (!env_var_name) {
+        return "";
+    }
+    read = 0;
+
+    #ifdef _MSC_VER
+    char lvl[32];
+    getenv_s(&read, lvl, env_var_name);
+    #else
+    char *lvl = getenv(env_var_name);
+    read = (lvl)?1:0;
+    #endif
+
+    if (read) {
+        return std::string(lvl);
+    }
+    else {
+        return "";
+    }
+}
+
+string running_program_name() {
+    // linux specific currently.
+    #ifndef __linux__
+    return "";
+    #else
+    string program_name;
+    char path[PATH_MAX];
+    ssize_t len = ::readlink("/proc/self/exe", path, sizeof(path)-1);
+    if (len != -1) {
+        path[len] = '\0';
+        string tmp = std::string(path);
+        program_name = tmp.substr(tmp.find_last_of("/")+1);
+    }
+    else {
+        return "";
+    }
+    return program_name;
+    #endif
+}
+
+// TODO: Rationalize the two different versions of unique_name,
+// possibly changing the name of one of them as they are used
+// for different things, and in fact the two versions can end
+// up returning the same name, thus they are not collectively
+// unique.
 string unique_name(char prefix) {
     // arrays with static storage duration should be initialized to zero automatically
-    static int instances[256];
+    static std::atomic<int> instances[256];
     ostringstream str;
     str << prefix << instances[(unsigned char)prefix]++;
     return str.str();
@@ -38,48 +92,49 @@ bool ends_with(const string &str, const string &suffix) {
     return true;
 }
 
-/** Convert an integer to a string. */
-string int_to_string(int x) {
-    // Most calls to this function are during lowering, and correspond
-    // to the dimensions of some buffer. So this gets called with 0,
-    // 1, 2, and 3 a lot, and it's worth optimizing those cases.
-    static const string small_ints[] = {"0", "1", "2", "3", "4", "5", "6", "7"};
-    if (x < 8) return small_ints[x];
-    ostringstream ss;
-    ss << x;
-    return ss.str();
+string replace_all(string &str, const string &find, const string &replace) {
+    size_t pos = 0;
+    while ((pos = str.find(find, pos)) != string::npos) {
+        str.replace(pos, find.length(), replace);
+        pos += replace.length();
+    }
+    return str;
 }
 
 string unique_name(const string &name, bool user) {
-    static map<string, int> known_names;
+    static std::mutex known_names_lock;
+    static map<string, int> *known_names = new map<string, int>();
+    {
+        std::lock_guard<std::mutex> lock(known_names_lock);
 
-    // An empty string really does not make sense, but use 'z' as prefix.
-    if (name.length() == 0) {
-        return unique_name('z');
-    }
-
-    // Check the '$' character doesn't appear in the prefix. This lets
-    // us separate the name from the number using '$' as a delimiter,
-    // which guarantees uniqueness of the generated name, without
-    // having to track all names generated so far.
-    if (user) {
-        for (size_t i = 0; i < name.length(); i++) {
-            user_assert(name[i] != '$')
-                << "Name \"" << name << "\" is invalid. "
-                << "Halide names may not contain the character '$'\n";
+        // An empty string really does not make sense, but use 'z' as prefix.
+        if (name.length() == 0) {
+            return unique_name('z');
         }
-    }
 
-    int &count = known_names[name];
-    count++;
-    if (count == 1) {
-        // The very first unique name is the original function name itself.
-        return name;
-    } else {
-        // Use the programmer-specified name but append a number to make it unique.
-        ostringstream oss;
-        oss << name << '$' << count;
-        return oss.str();
+        // Check the '$' character doesn't appear in the prefix. This lets
+        // us separate the name from the number using '$' as a delimiter,
+        // which guarantees uniqueness of the generated name, without
+        // having to track all names generated so far.
+        if (user) {
+            for (size_t i = 0; i < name.length(); i++) {
+                user_assert(name[i] != '$')
+                    << "Name \"" << name << "\" is invalid. "
+                    << "Halide names may not contain the character '$'\n";
+            }
+        }
+
+        int &count = (*known_names)[name];
+        count++;
+        if (count == 1) {
+            // The very first unique name is the original function name itself.
+            return name;
+        } else {
+            // Use the programmer-specified name but append a number to make it unique.
+            ostringstream oss;
+            oss << name << '$' << count;
+            return oss.str();
+        }
     }
 }
 
@@ -92,7 +147,8 @@ string base_name(const string &name, char delim) {
 }
 
 string make_entity_name(void *stack_ptr, const string &type, char prefix) {
-    string name = get_variable_name(stack_ptr, type);
+    string name = Introspection::get_variable_name(stack_ptr, type);
+
     if (name.empty()) {
         return unique_name(prefix);
     } else {
@@ -104,6 +160,30 @@ string make_entity_name(void *stack_ptr, const string &type, char prefix) {
         }
         return unique_name(name);
     }
+}
+
+std::vector<std::string> split_string(const std::string &source, const std::string &delim) {
+    std::vector<std::string> elements;
+    size_t start = 0;
+    size_t found = 0;
+    while ((found = source.find(delim, start)) != std::string::npos) {
+        elements.push_back(source.substr(start, found - start));
+        start = found + delim.size();
+    }
+
+    // If start is exactly source.size(), the last thing in source is a
+    // delimiter, in which case we want to add an empty string to elements.
+    if (start <= source.size()) {
+        elements.push_back(source.substr(start, std::string::npos));
+    }
+    return elements;
+}
+
+std::string extract_namespaces(const std::string &name, std::vector<std::string> &namespaces) {
+    namespaces = split_string(name, "::");
+    std::string result = namespaces.back();
+    namespaces.pop_back();
+    return result;
 }
 
 }

@@ -23,7 +23,7 @@ public:
      * source module shared by a given Halide pipeline. */
     void add_kernel(Stmt stmt,
                     const std::string &name,
-                    const std::vector<GPU_Argument> &args);
+                    const std::vector<DeviceArgument> &args);
 
     /** (Re)initialize the GPU kernel module. This is separate from compile,
      * since a GPU device module will often have many kernels compiled into it
@@ -36,6 +36,10 @@ public:
 
     void dump();
 
+    virtual std::string print_gpu_name(const std::string &name);
+
+    std::string api_unique_name() { return "opencl"; }
+
 protected:
 
     class CodeGen_OpenCL_C : public CodeGen_C {
@@ -43,25 +47,32 @@ protected:
         CodeGen_OpenCL_C(std::ostream &s) : CodeGen_C(s) {}
         void add_kernel(Stmt stmt,
                         const std::string &name,
-                        const std::vector<GPU_Argument> &args);
+                        const std::vector<DeviceArgument> &args);
 
     protected:
         using CodeGen_C::visit;
-        std::string print_type(Type type);
+        std::string print_type(Type type, AppendSpaceIfNeeded append_space = DoNotAppendSpace);
         std::string print_reinterpret(Type type, Expr e);
 
         std::string get_memory_space(const std::string &);
 
-        void visit(const Div *);
-        void visit(const Mod *);
         void visit(const For *);
         void visit(const Ramp *op);
         void visit(const Broadcast *op);
+        void visit(const Call *op);
         void visit(const Load *op);
         void visit(const Store *op);
         void visit(const Cast *op);
+        void visit(const Select *op);
+        void visit(const EQ *);
+        void visit(const NE *);
+        void visit(const LT *);
+        void visit(const LE *);
+        void visit(const GT *);
+        void visit(const GE *);
         void visit(const Allocate *op);
         void visit(const Free *op);
+        void visit(const AssertStmt *op);
     };
 
     std::ostringstream src_stream;

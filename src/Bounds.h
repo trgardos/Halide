@@ -1,15 +1,13 @@
 #ifndef HALIDE_BOUNDS_H
 #define HALIDE_BOUNDS_H
 
-#include "IR.h"
-#include "IROperator.h"
-#include "Scope.h"
-#include <vector>
-
 /** \file
  * Methods for computing the upper and lower bounds of an expression,
  * and the regions of a function read or written by a statement.
  */
+
+#include "IROperator.h"
+#include "Scope.h"
 
 namespace Halide {
 namespace Internal {
@@ -27,7 +25,9 @@ typedef std::map<std::pair<std::string, int>, Interval> FuncValueBounds;
  * maximum possible value)), compute two expressions that give the
  * minimum possible value and the maximum possible value of this
  * expression. Max or min may be undefined expressions if the value is
- * not bounded above or below.
+ * not bounded above or below. If the expression is a vector, also
+ * takes the bounds across the vector lanes and returns a scalar
+ * result.
  *
  * This is for tasks such as deducing the region of a buffer
  * loaded by a chunk of code.
@@ -35,6 +35,13 @@ typedef std::map<std::pair<std::string, int>, Interval> FuncValueBounds;
 Interval bounds_of_expr_in_scope(Expr expr,
                                  const Scope<Interval> &scope,
                                  const FuncValueBounds &func_bounds = FuncValueBounds());
+
+/* Given a varying expression, try to find a constant that is either:
+ * An upper bound (always greater than or equal to the expression), or
+ * A lower bound (always less than or equal to the expression)
+ * If it fails, returns an undefined Expr. */
+enum class Direction {Upper, Lower};
+Expr find_constant_bound(Expr e, Direction d);
 
 /** Represents the bounds of a region of arbitrary dimension. Zero
  * dimensions corresponds to a scalar region. */
@@ -131,7 +138,7 @@ Box box_touched(Stmt s, std::string fn,
 FuncValueBounds compute_function_value_bounds(const std::vector<std::string> &order,
                                               const std::map<std::string, Function> &env);
 
-void bounds_test();
+EXPORT void bounds_test();
 
 }
 }

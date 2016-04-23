@@ -47,6 +47,20 @@ define weak_odr double @sqrt_f64(double %x) nounwind uwtable readnone alwaysinli
        ret double %y
 }
 
+declare float @__nv_frcp_rn(float) nounwind readnone
+
+define weak_odr float @fast_inverse_f32(float %x) nounwind uwtable readnone alwaysinline {
+       %y = tail call float @__nv_frcp_rn(float %x) nounwind readnone
+       ret float %y
+}
+
+declare float @llvm.nvvm.rsqrt.approx.ftz.f(float) nounwind readnone
+
+define weak_odr float @fast_inverse_sqrt_f32(float %x) nounwind uwtable readnone alwaysinline {
+       %y = tail call float @llvm.nvvm.rsqrt.approx.ftz.f(float %x) nounwind readnone
+       ret float %y
+}
+
 declare float @__nv_sinf(float) nounwind readnone
 declare double @__nv_sin(double) nounwind readnone
 
@@ -322,5 +336,12 @@ define weak_odr double @atanh_f64(double %x) nounwind uwtable readnone alwaysinl
 
 define weak_odr i32 @halide_gpu_thread_barrier() nounwind uwtable alwaysinline {
        call void @llvm.nvvm.barrier0() nounwind
+       ret i32 0
+}
+
+define weak_odr i32 @halide_ptx_trap() nounwind uwtable alwaysinline {
+       tail call void asm sideeffect "
+       trap;
+       ", ""() nounwind
        ret i32 0
 }

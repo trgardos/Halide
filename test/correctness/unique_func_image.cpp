@@ -1,11 +1,11 @@
 #include <stdio.h>
-#include <Halide.h>
+#include "Halide.h"
 
 using namespace Halide;
 
 Func add2(Func in) {
     Func a("ext");
-    a(_) = in + 2;
+    a(_) = in(_) + 2;
     return a;
 }
 

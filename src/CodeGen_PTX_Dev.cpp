@@ -5,11 +5,16 @@
 #include "Debug.h"
 #include "Target.h"
 #include "LLVM_Headers.h"
+#include "LLVM_Runtime_Linker.h"
 
 // This is declared in NVPTX.h, which is not exported. Ugly, but seems better than
 // hardcoding a path to the .h file.
 #ifdef WITH_PTX
+#if LLVM_VERSION >= 39
+namespace llvm { FunctionPass *createNVVMReflectPass(const StringMap<int>& Mapping); }
+#else
 namespace llvm { ModulePass *createNVVMReflectPass(const StringMap<int>& Mapping); }
+#endif
 #endif
 
 namespace Halide {
@@ -20,16 +25,29 @@ using std::string;
 
 using namespace llvm;
 
-CodeGen_PTX_Dev::CodeGen_PTX_Dev(Target host) : CodeGen(host) {
+CodeGen_PTX_Dev::CodeGen_PTX_Dev(Target host) : CodeGen_LLVM(host) {
     #if !(WITH_PTX)
     user_error << "ptx not enabled for this build of Halide.\n";
     #endif
     user_assert(llvm_NVPTX_enabled) << "llvm build not configured with nvptx target enabled\n.";
+
+    context = new llvm::LLVMContext();
+}
+
+CodeGen_PTX_Dev::~CodeGen_PTX_Dev() {
+    // This is required as destroying the context before the module
+    // results in a crash. Really, reponsbility for destruction
+    // should be entirely in the parent class.
+    // TODO: Figure out how to better manage the context -- e.g. allow using
+    // same one as the host.
+    module.reset();
+    delete context;
 }
 
 void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
                                  const std::string &name,
-                                 const std::vector<GPU_Argument> &args) {
+                                 const std::vector<DeviceArgument> &args) {
+    internal_assert(module != nullptr);
 
     debug(2) << "In CodeGen_PTX_Dev::add_kernel\n";
 
@@ -44,9 +62,8 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
     }
 
     // Make our function
-    function_name = name;
     FunctionType *func_t = FunctionType::get(void_t, arg_types, false);
-    function = llvm::Function::Create(func_t, llvm::Function::ExternalLinkage, name, module);
+    function = llvm::Function::Create(func_t, llvm::Function::ExternalLinkage, name, module.get());
 
     // Mark the buffer args as no alias
     for (size_t i = 0; i < args.size(); i++) {
@@ -64,9 +81,7 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
     vector<string> arg_sym_names;
     {
         size_t i = 0;
-        for (llvm::Function::arg_iterator iter = function->arg_begin();
-             iter != function->arg_end();
-             iter++) {
+        for (auto &fn_arg : function->args()) {
 
             string arg_sym_name = args[i].name;
             if (args[i].is_buffer) {
@@ -75,8 +90,8 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
                 // as foo.host in this scope.
                 arg_sym_name += ".host";
             }
-            sym_push(arg_sym_name, iter);
-            iter->setName(arg_sym_name);
+            sym_push(arg_sym_name, &fn_arg);
+            fn_arg.setName(arg_sym_name);
             arg_sym_names.push_back(arg_sym_name);
 
             i++;
@@ -102,10 +117,15 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
     builder->CreateBr(body_block);
 
     // Add the nvvm annotation that it is a kernel function.
-    MDNode *mdNode = MDNode::get(*context, vec<Value *>(function,
-                                                        MDString::get(*context, "kernel"),
-                                                        ConstantInt::get(i32, 1)));
-    module->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(mdNode);
+    LLVMMDNodeArgumentType md_args[] = {
+        value_as_metadata_type(function),
+        MDString::get(*context, "kernel"),
+        value_as_metadata_type(ConstantInt::get(i32, 1))
+    };
+
+    MDNode *md_node = MDNode::get(*context, md_args);
+
+    module->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(md_node);
 
 
     // Now verify the function is ok
@@ -123,14 +143,11 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
 }
 
 void CodeGen_PTX_Dev::init_module() {
-
-    CodeGen::init_module();
+    init_context();
 
     #ifdef WITH_PTX
     module = get_initial_module_for_ptx_device(target, context);
     #endif
-
-    owns_module = true;
 }
 
 string CodeGen_PTX_Dev::simt_intrinsic(const string &name) {
@@ -163,11 +180,13 @@ void CodeGen_PTX_Dev::visit(const For *loop) {
         codegen(loop->body);
         sym_pop(loop->name);
     } else {
-        CodeGen::visit(loop);
+        CodeGen_LLVM::visit(loop);
     }
 }
 
 void CodeGen_PTX_Dev::visit(const Allocate *alloc) {
+    user_assert(!alloc->new_expr.defined()) << "Allocate node inside PTX kernel has custom new expression.\n" <<
+        "(Memoization is not supported inside GPU kernels at present.)\n";
 
     if (alloc->name == "__shared") {
         // PTX uses zero in address space 3 as the base address for shared memory
@@ -184,9 +203,8 @@ void CodeGen_PTX_Dev::visit(const Allocate *alloc) {
         // jumping back we're rendering any expression we carry back
         // meaningless, so we had better only be dealing with
         // constants here.
-        int32_t size = 0;
-        bool is_constant = constant_allocation_size(alloc->extents, allocation_name, size);
-        user_assert(is_constant)
+        int32_t size = alloc->constant_allocation_size();
+        user_assert(size > 0)
             << "Allocation " << alloc->name << " has a dynamic size. "
             << "Only fixed-size allocations are supported on the gpu. "
             << "Try storing into shared memory instead.";
@@ -203,6 +221,12 @@ void CodeGen_PTX_Dev::visit(const Allocate *alloc) {
 
 void CodeGen_PTX_Dev::visit(const Free *f) {
     sym_pop(f->name + ".host");
+}
+
+void CodeGen_PTX_Dev::visit(const AssertStmt *op) {
+    // Discard the error message for now.
+    Expr trap = Call::make(Int(32), "halide_ptx_trap", {}, Call::Extern);
+    codegen(IfThenElse::make(!op->condition, Evaluate::make(trap)));
 }
 
 string CodeGen_PTX_Dev::march() const {
@@ -224,8 +248,8 @@ string CodeGen_PTX_Dev::mcpu() const {
 }
 
 string CodeGen_PTX_Dev::mattrs() const {
-    if (target.features_any_of(vec(Target::CUDACapability32,
-                                   Target::CUDACapability50))) {
+    if (target.features_any_of({Target::CUDACapability32,
+                                Target::CUDACapability50})) {
         // Need ptx isa 4.0. llvm < 3.5 doesn't support it.
         #if LLVM_VERSION < 35
         user_error << "This version of Halide was linked against llvm 3.4 or earlier, "
@@ -259,9 +283,7 @@ vector<char> CodeGen_PTX_Dev::compile_to_src() {
     // Generic llvm optimizations on the module.
     optimize_module();
 
-    // Set up TargetTriple
-    module->setTargetTriple(Triple::normalize(march()+"--"));
-    Triple TheTriple(module->getTargetTriple());
+    llvm::Triple triple(module->getTargetTriple());
 
     // Allocate target machine
     const std::string MArch = march();
@@ -269,38 +291,44 @@ vector<char> CodeGen_PTX_Dev::compile_to_src() {
     const llvm::Target* TheTarget = 0;
 
     std::string errStr;
-    TheTarget = TargetRegistry::lookupTarget(TheTriple.getTriple(), errStr);
+    TheTarget = TargetRegistry::lookupTarget(triple.str(), errStr);
     internal_assert(TheTarget);
 
     TargetOptions Options;
     Options.LessPreciseFPMADOption = true;
     Options.PrintMachineCode = false;
-    Options.NoFramePointerElim = false;
     //Options.NoExcessFPPrecision = false;
     Options.AllowFPOpFusion = FPOpFusion::Fast;
     Options.UnsafeFPMath = true;
     Options.NoInfsFPMath = false;
     Options.NoNaNsFPMath = false;
     Options.HonorSignDependentRoundingFPMathOption = false;
+    #if LLVM_VERSION < 37
+    Options.NoFramePointerElim = false;
     Options.UseSoftFloat = false;
+    #endif
     /* if (FloatABIForCalls != FloatABI::Default) */
         /* Options.FloatABIType = FloatABIForCalls; */
     Options.NoZerosInBSS = false;
     #if LLVM_VERSION < 33
     Options.JITExceptionHandling = false;
     #endif
+    #if LLVM_VERSION < 37
     Options.JITEmitDebugInfo = false;
     Options.JITEmitDebugInfoToDisk = false;
+    #endif
     Options.GuaranteedTailCallOpt = false;
     Options.StackAlignmentOverride = 0;
     // Options.DisableJumpTables = false;
+    #if LLVM_VERSION < 37
     Options.TrapFuncName = "";
+    #endif
 
     CodeGenOpt::Level OLvl = CodeGenOpt::Aggressive;
 
     const std::string FeaturesStr = mattrs();
-    std::auto_ptr<TargetMachine>
-        target(TheTarget->createTargetMachine(TheTriple.getTriple(),
+    std::unique_ptr<TargetMachine>
+        target(TheTarget->createTargetMachine(triple.str(),
                                               MCPU, FeaturesStr, Options,
                                               llvm::Reloc::Default,
                                               llvm::CodeModel::Default,
@@ -309,40 +337,53 @@ vector<char> CodeGen_PTX_Dev::compile_to_src() {
     TargetMachine &Target = *target.get();
 
     // Set up passes
+    #if LLVM_VERSION < 37
+    std::string outstr;
     PassManager PM;
+    #else
+    llvm::SmallString<8> outstr;
+    raw_svector_ostream ostream(outstr);
+    ostream.SetUnbuffered();
+    legacy::PassManager PM;
+    #endif
 
-    TargetLibraryInfo *TLI = new TargetLibraryInfo(TheTriple);
-    PM.add(TLI);
+    #if LLVM_VERSION < 37
+    PM.add(new TargetLibraryInfo(triple));
+    #else
+    PM.add(new TargetLibraryInfoWrapperPass(triple));
+    #endif
 
     if (target.get()) {
         #if LLVM_VERSION < 33
         PM.add(new TargetTransformInfo(target->getScalarTargetTransformInfo(),
                                        target->getVectorTargetTransformInfo()));
-        #else
+        #elif LLVM_VERSION < 37
         target->addAnalysisPasses(PM);
         #endif
     }
 
-    // Add the target data from the target machine, if it exists, or the module.
+    #if LLVM_VERSION < 37
+    #if LLVM_VERSION == 36
+    const DataLayout *TD = Target.getSubtargetImpl()->getDataLayout();
+    #else
+    const DataLayout *TD = Target.getDataLayout();
+    #endif
+
     #if LLVM_VERSION < 35
-    if (const DataLayout *TD = Target.getDataLayout()) {
+    if (TD) {
         PM.add(new DataLayout(*TD));
     } else {
-        PM.add(new DataLayout(module));
+        PM.add(new DataLayout(module.get()));
     }
     #else
+    if (TD) {
+        module->setDataLayout(TD);
+    }
     #if LLVM_VERSION == 35
-    const DataLayout *TD = Target.getDataLayout();
-    if (TD) {
-        module->setDataLayout(TD);
-    }
-    PM.add(new DataLayoutPass(module));
+    PM.add(new DataLayoutPass(module.get()));
     #else // llvm >= 3.6
-    const DataLayout *TD = Target.getSubtargetImpl()->getDataLayout();
-    if (TD) {
-        module->setDataLayout(TD);
-    }
     PM.add(new DataLayoutPass);
+    #endif
     #endif
     #endif
 
@@ -371,12 +412,17 @@ vector<char> CodeGen_PTX_Dev::compile_to_src() {
     PM.add(createAlwaysInlinerPass());
 
     // Override default to generate verbose assembly.
+    #if LLVM_VERSION < 37
     Target.setAsmVerbosityDefault(true);
+    #else
+    Target.Options.MCOptions.AsmVerbose = true;
+    #endif
 
     // Output string stream
-    std::string outstr;
+    #if LLVM_VERSION < 37
     raw_string_ostream outs(outstr);
     formatted_raw_ostream ostream(outs);
+    #endif
 
     // Ask the target to add backend passes as necessary.
     bool fail = Target.addPassesToEmitFile(PM, ostream,
@@ -388,17 +434,17 @@ vector<char> CodeGen_PTX_Dev::compile_to_src() {
 
     PM.run(*module);
 
+    #if LLVM_VERSION < 38
     ostream.flush();
+    #endif
 
     if (debug::debug_level >= 2) {
         module->dump();
     }
     debug(2) << "Done with CodeGen_PTX_Dev::compile_to_src";
 
-
-    string str = outs.str();
-    debug(1) << "PTX kernel:\n" << str.c_str() << "\n";
-    vector<char> buffer(str.begin(), str.end());
+    debug(1) << "PTX kernel:\n" << outstr.c_str() << "\n";
+    vector<char> buffer(outstr.begin(), outstr.end());
     buffer.push_back(0);
     return buffer;
 #else // WITH_PTX
@@ -406,6 +452,10 @@ vector<char> CodeGen_PTX_Dev::compile_to_src() {
 #endif
 }
 
+int CodeGen_PTX_Dev::native_vector_bits() const {
+    // PTX doesn't really do vectorization. The widest type is a double.
+    return 64;
+}
 
 string CodeGen_PTX_Dev::get_current_kernel_name() {
     return function->getName();
@@ -413,6 +463,10 @@ string CodeGen_PTX_Dev::get_current_kernel_name() {
 
 void CodeGen_PTX_Dev::dump() {
     module->dump();
+}
+
+std::string CodeGen_PTX_Dev::print_gpu_name(const std::string &name) {
+    return name;
 }
 
 }}

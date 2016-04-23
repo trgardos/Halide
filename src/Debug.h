@@ -19,10 +19,16 @@ struct Type;
 EXPORT std::ostream &operator<<(std::ostream &stream, const Expr &);
 EXPORT std::ostream &operator<<(std::ostream &stream, const Type &);
 
+class Module;
+EXPORT std::ostream &operator<<(std::ostream &stream, const Module &);
+
 namespace Internal {
 
 struct Stmt;
-std::ostream &operator<<(std::ostream &stream, const Stmt &);
+EXPORT std::ostream &operator<<(std::ostream &stream, const Stmt &);
+
+struct LoweredFunc;
+EXPORT std::ostream &operator << (std::ostream &, const LoweredFunc &);
 
 /** For optional debugging during codegen, use the debug class as
  * follows:
@@ -46,19 +52,13 @@ struct debug {
     debug(int v) : verbosity(v) {
         if (!initialized) {
             // Read the debug level from the environment
-            #ifdef _WIN32
-            char lvl[32];
-            size_t read = 0;
-            getenv_s(&read, lvl, "HL_DEBUG_CODEGEN");
+            size_t read;
+            std::string lvl = get_env_variable("HL_DEBUG_CODEGEN", read);
             if (read) {
-            #else
-            if (char *lvl = getenv("HL_DEBUG_CODEGEN")) {
-            #endif
-                debug_level = atoi(lvl);
+                debug_level = atoi(lvl.c_str());
             } else {
                 debug_level = 0;
             }
-
             initialized = true;
         }
     }

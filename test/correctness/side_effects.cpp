@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <Halide.h>
+#include "Halide.h"
 #include <math.h>
 
 using namespace Halide;
@@ -15,7 +15,7 @@ using namespace Halide;
 // thread-safe.
 
 // Here we use an extern call to print an ascii-art Mandelbrot set.
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define DLLEXPORT __declspec(dllexport)
 #else
 #define DLLEXPORT
@@ -32,8 +32,8 @@ extern "C" DLLEXPORT int draw_pixel(int x, int y, int val) {
 
     const char *code = " .:-~*={}&%#@";
 
-    if (val >= strlen(code)) {
-        val = strlen(code)-1;
+    if (val >= static_cast<int>(strlen(code))) {
+        val = static_cast<int>(strlen(code))-1;
     }
     printf("%c", code[val]);
     return 0;

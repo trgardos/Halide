@@ -33,10 +33,11 @@ private:
         // a comparison on b and a.
         uint64_t pa = (uint64_t)(a.ptr);
         uint64_t pb = (uint64_t)(b.ptr);
-        pa ^= pb;
-        pa ^= pa >> bits;
-        pa ^= pa >> (bits*2);
-        return pa & ((1 << bits) - 1);
+        uint64_t mix = (pa + pb) + (pa ^ pb);
+        mix ^= (mix >> bits);
+        mix ^= (mix >> (bits*2));
+        uint32_t bottom = mix & ((1 << bits) - 1);
+        return bottom;
     }
 
     std::vector<Entry> entries;
@@ -64,7 +65,6 @@ public:
 
     IRCompareCache() {}
     IRCompareCache(int b) : bits(b), entries(1 << bits) {}
-
 };
 
 /** A wrapper about Exprs so that they can be deeply compared with a
@@ -94,7 +94,7 @@ struct ExprWithCompareCache {
     Expr expr;
     mutable IRCompareCache *cache;
 
-    ExprWithCompareCache() : cache(NULL) {}
+    ExprWithCompareCache() : cache(nullptr) {}
     ExprWithCompareCache(const Expr &e, IRCompareCache *c) : expr(e), cache(c) {}
 
     /** The comparison uses (and updates) the cache */

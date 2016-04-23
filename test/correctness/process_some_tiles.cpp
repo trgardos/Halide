@@ -1,11 +1,11 @@
-#include <Halide.h>
+#include "Halide.h"
 #include <stdio.h>
 #include <math.h>
 
 using namespace Halide;
 
 // A version of pow that tracks usage so we can check how many times it was called.
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define DLLEXPORT __declspec(dllexport)
 #else
 #define DLLEXPORT

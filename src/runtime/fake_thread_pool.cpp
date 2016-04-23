@@ -1,10 +1,41 @@
-#include "runtime_internal.h"
-
 #include "HalideRuntime.h"
 
 extern "C" {
+WEAK int halide_do_task(void *user_context, halide_task_t f, int idx,
+                        uint8_t *closure);
+}
 
-WEAK void halide_mutex_destroy(halide_mutex *mutex_arg) {
+namespace Halide { namespace Runtime { namespace Internal {
+
+WEAK int default_do_task(void *user_context, halide_task_t f, int idx,
+                        uint8_t *closure) {
+    return f(user_context, idx, closure);
+}
+
+WEAK int default_do_par_for(void *user_context, halide_task_t f,
+                           int min, int size, uint8_t *closure) {
+    for (int x = min; x < min + size; x++) {
+        int result = halide_do_task(user_context, f, x, closure);
+        if (result) {
+            return result;
+        }
+    }
+    return 0;
+}
+
+WEAK halide_do_task_t custom_do_task = default_do_task;
+WEAK halide_do_par_for_t custom_do_par_for = default_do_par_for;
+
+}}} // namespace Halide::Runtime::Internal
+
+extern "C" {
+
+WEAK void halide_spawn_thread(void *user_context, void (*f)(void *), void *closure) {
+    // We can't fake spawning a thread. Emit an error.
+    halide_error(user_context, "halide_spawn_thread not implemented on this platform.");
+}
+
+WEAK void halide_mutex_cleanup(halide_mutex *mutex_arg) {
 }
 
 WEAK void halide_mutex_lock(halide_mutex *mutex) {
@@ -19,43 +50,26 @@ WEAK void halide_shutdown_thread_pool() {
 WEAK void halide_set_num_threads(int) {
 }
 
-WEAK int (*halide_custom_do_task)(void *, int (*)(void *, int, uint8_t *),
-                                  int, uint8_t *);
-
-WEAK void halide_set_custom_do_task(int (*f)(void *, int (*)(void *, int, uint8_t *),
-                                             int, uint8_t *)) {
-    halide_custom_do_task = f;
+WEAK halide_do_task_t halide_set_custom_do_task(halide_do_task_t f) {
+    halide_do_task_t result = custom_do_task;
+    custom_do_task = f;
+    return result;
 }
 
-WEAK int (*halide_custom_do_par_for)(void *, int (*)(void *, int, uint8_t *), int, int, uint8_t *);
-
-WEAK void halide_set_custom_do_par_for(int (*f)(void *, int (*)(void *, int, uint8_t *),
-                                                int, int, uint8_t *)) {
-    halide_custom_do_par_for = f;
+WEAK halide_do_par_for_t halide_set_custom_do_par_for(halide_do_par_for_t f) {
+    halide_do_par_for_t result = custom_do_par_for;
+    custom_do_par_for = f;
+    return result;
 }
 
-WEAK int halide_do_task(void *user_context, int (*f)(void *, int, uint8_t *),
-                        int idx, uint8_t *closure) {
-    if (halide_custom_do_task) {
-        return (*halide_custom_do_task)(user_context, f, idx, closure);
-    } else {
-        return f(user_context, idx, closure);
-    }
+WEAK int halide_do_task(void *user_context, halide_task_t f, int idx,
+                        uint8_t *closure) {
+    return (*custom_do_task)(user_context, f, idx, closure);
 }
 
-WEAK int halide_do_par_for(void *user_context, int (*f)(void *, int, uint8_t *),
+WEAK int halide_do_par_for(void *user_context, halide_task_t f,
                            int min, int size, uint8_t *closure) {
-    if (halide_custom_do_par_for) {
-        return (*halide_custom_do_par_for)(user_context, f, min, size, closure);
-    }
-
-    for (int x = min; x < min + size; x++) {
-        int result = halide_do_task(user_context, f, x, closure);
-        if (result) {
-            return result;
-        }
-    }
-    return 0;
+  return (*custom_do_par_for)(user_context, f, min, size, closure);
 }
 
-}
+}  // extern "C"

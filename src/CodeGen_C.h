@@ -6,12 +6,8 @@
  * Defines an IRPrinter that emits C++ code equivalent to a halide stmt
  */
 
-#include <string>
-#include <vector>
-#include <ostream>
-#include <map>
-
 #include "IRPrinter.h"
+#include "Module.h"
 #include "Scope.h"
 
 namespace Halide {
@@ -27,28 +23,43 @@ namespace Internal {
  */
 class CodeGen_C : public IRPrinter {
 public:
+    enum OutputKind {
+        CHeader,
+        CPlusPlusHeader,
+        CImplementation,
+        CPlusPlusImplementation,
+    };
+
     /** Initialize a C code generator pointing at a particular output
      * stream (e.g. a file, or std::cout) */
-    CodeGen_C(std::ostream &);
+    CodeGen_C(std::ostream &dest, OutputKind output_kind = CImplementation,
+              const std::string &include_guard = "");
+    ~CodeGen_C();
 
-    /** Emit source code equivalent to the given statement, wrapped in
-     * a function with the given type signature */
-    void compile(Stmt stmt, std::string name,
-                 const std::vector<Argument> &args,
-                 const std::vector<Buffer> &images_to_embed);
+    /** Emit the declarations contained in the module as C code. */
+    void compile(const Module &module);
 
-    /** Emit a header file defining a halide pipeline with the given
-     * type signature */
-    void compile_header(const std::string &name, const std::vector<Argument> &args);
-
-    static void test();
+    EXPORT static void test();
 
 protected:
+    /** Emit a declaration. */
+    // @{
+    virtual void compile(const LoweredFunc &func);
+    virtual void compile(const Buffer &buffer);
+    // @}
+
     /** An ID for the most recently generated ssa variable */
     std::string id;
 
+    /** Controls whether this instance is generating declarations or
+     * definitions and whether the interface us extern "C" or C++. */
+    OutputKind output_kind;
+
     /** A cache of generated values in scope */
     std::map<std::string, std::string> cache;
+
+    /** Remember already emitted funcitons. */
+    std::set<std::string> emitted;
 
     /** Emit an expression as an assignment, then return the id of the
      * resulting var */
@@ -57,8 +68,17 @@ protected:
     /** Emit a statement */
     void print_stmt(Stmt);
 
-    /** Emit the C name for a halide type */
-    virtual std::string print_type(Type);
+    enum AppendSpaceIfNeeded {
+        DoNotAppendSpace,
+        AppendSpace,
+    };
+
+    /** Emit the C name for a halide type. If space_option is AppendSpace,
+     *  and there should be a space between the type and the next token,
+     *  one is appended. (This allows both "int foo" and "Foo *foo" to be
+     *  formatted correctly. Otherwise the latter is "Foo * foo".)
+     */
+    virtual std::string print_type(Type, AppendSpaceIfNeeded space_option = DoNotAppendSpace);
 
     /** Emit a statement to reinterpret an expression as another type */
     virtual std::string print_reinterpret(Type, Expr);
@@ -69,17 +89,37 @@ protected:
     /** Emit an SSA-style assignment, and set id to the freshly generated name. Return id. */
     std::string print_assignment(Type t, const std::string &rhs);
 
+    /** Return true if only generating an interface, which may be extern "C" or C++ */
+    bool is_header() {
+        return output_kind == CHeader ||
+               output_kind == CPlusPlusHeader;
+    }
+
+    /** Return true if generating C++ linkage. */
+    bool is_c_plus_plus_interface() {
+        return output_kind == CPlusPlusHeader ||
+               output_kind == CPlusPlusImplementation;
+    }
+
     /** Open a new C scope (i.e. throw in a brace, increase the indent) */
     void open_scope();
 
     /** Close a C scope (i.e. throw in an end brace, decrease the indent) */
     void close_scope(const std::string &comment);
 
-    /** Unpack a buffer into its constituent parts */
-    void unpack_buffer(Type t, const std::string &buffer_name);
+    /** Unpack a buffer into its constituent parts and push it on the allocations stack. */
+    void push_buffer(Type t, const std::string &buffer_name);
+
+    /** Pop a buffer from the stack. */
+    void pop_buffer(const std::string &buffer_name);
+
+    struct Allocation {
+        Type type;
+        std::string free_function;
+    };
 
     /** Track the types of allocations to avoid unnecessary casts. */
-    Scope<Type> allocations;
+    Scope<Allocation> allocations;
 
     /** Track which allocations actually went on the heap. */
     Scope<int> heap_allocations;
@@ -91,6 +131,7 @@ protected:
 
     void visit(const Variable *);
     void visit(const IntImm *);
+    void visit(const UIntImm *);
     void visit(const StringImm *);
     void visit(const FloatImm *);
     void visit(const Cast *);
@@ -117,7 +158,7 @@ protected:
     void visit(const Let *);
     void visit(const LetStmt *);
     void visit(const AssertStmt *);
-    void visit(const Pipeline *);
+    void visit(const ProducerConsumer *);
     void visit(const For *);
     void visit(const Provide *);
     void visit(const Allocate *);

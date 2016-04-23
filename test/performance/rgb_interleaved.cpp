@@ -1,7 +1,7 @@
-#include <Halide.h>
-#include <stdio.h>
-#include "clock.h"
+#include "Halide.h"
+#include <cstdio>
 #include <memory>
+#include "benchmark.h"
 
 using namespace Halide;
 
@@ -11,7 +11,7 @@ void test_deinterleave() {
     Var x, y, c;
 
     dst(x, y, c) = src(x, y, c);
- 
+
     src.set_stride(0, 3);
     src.set_stride(2, 1);
     src.set_extent(2, 3);
@@ -77,14 +77,11 @@ void test_deinterleave() {
     // Warm up caches, etc.
     dst.realize(dst_image);
 
-    double t1 = current_time();
-
-    for (int i = 0; i < iterations; i++)
+    double t1 = benchmark(1, iterations, [&]() {
         dst.realize(dst_image);
+    });
 
-    double t2 = current_time();
-
-    printf("Interleaved to planar bandwidth %.3e byte/s.\n", (buffer_size / (t2 - t1)) * 1000 * iterations);
+    printf("Interleaved to planar bandwidth %.3e byte/s.\n", buffer_size / t1);
 
     for (int32_t x = 0; x < buffer_side_length; x++) {
         for (int32_t y = 0; y < buffer_side_length; y++) {
@@ -107,12 +104,9 @@ void test_deinterleave() {
 
     memset(dst_storage, 0, buffer_size);
 
-    double t3 = current_time();
-
-    for (int i = 0; i < iterations; i++)
+    double t2 = benchmark(1, iterations, [&]() {
         dst.realize(dst_image);
-
-    double t4 = current_time();
+    });
 
     for (int32_t x = 0; x < buffer_side_length; x++) {
         for (int32_t y = 0; y < buffer_side_length; y++) {
@@ -122,7 +116,7 @@ void test_deinterleave() {
         }
     }
 
-    printf("Interleaved to semi-planar bandwidth %.3e byte/s.\n", (buffer_size / (t4 - t3)) * 1000 * iterations);
+    printf("Interleaved to semi-planar bandwidth %.3e byte/s.\n", buffer_size / t2);
 
     delete[] src_storage;
     delete[] dst_storage;
@@ -150,7 +144,7 @@ void test_interleave(bool fast) {
     } else {
         dst.reorder(c, x, y).vectorize(x, 16);
     }
- 
+
     // Run test many times to avoid timing jitter
     const int iterations = 20;
 
@@ -201,23 +195,20 @@ void test_interleave(bool fast) {
     src.set(src_image);
 
     if( fast ) {
-        dst.compile_to_lowered_stmt("rgb_interleave_fast.stmt");
+        dst.compile_to_lowered_stmt("rgb_interleave_fast.stmt", dst.infer_arguments());
     } else {
-        dst.compile_to_lowered_stmt("rgb_interleave_slow.stmt");
+        dst.compile_to_lowered_stmt("rgb_interleave_slow.stmt", dst.infer_arguments());
     }
     dst.compile_jit();
 
     // Warm up caches, etc.
     dst.realize(dst_image);
 
-    double t1 = current_time();
-
-    for (int i = 0; i < iterations; i++)
+    double t = benchmark(1, iterations, [&]() {
         dst.realize(dst_image);
+    });
 
-    double t2 = current_time();
-
-    printf("Planar to interleaved bandwidth %.3e byte/s.\n", (buffer_size / (t2 - t1)) * 1000 * iterations);
+    printf("Planar to interleaved bandwidth %.3e byte/s.\n", buffer_size / t);
 
     for (int32_t x = 0; x < buffer_side_length; x++) {
         for (int32_t y = 0; y < buffer_side_length; y++) {
